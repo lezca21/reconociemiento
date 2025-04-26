@@ -1,178 +1,165 @@
-import cv2
 import streamlit as st
-import numpy as np
 import pandas as pd
-import torch
-import os
-import sys
+import altair as alt
+from textblob import TextBlob
+import re
+from googletrans import Translator
 
-# Configuración de página Streamlit
+# 🎀 Configuración de la página
 st.set_page_config(
-    page_title="Detección de Objetos en Tiempo Real",
-    page_icon="🔍",
+    page_title="Analizador de Textos Cute ✨",
+    page_icon="🌸",
     layout="wide"
 )
 
-# Función para cargar el modelo YOLOv5 de manera compatible con versiones anteriores de PyTorch
-@st.cache_resource
-def load_yolov5_model(model_path='yolov5s.pt'):
-    try:
-        # Importar yolov5
-        import yolov5
-        
-        # Para versiones de PyTorch anteriores a 2.0, cargar directamente con weights_only=False
-        # o usar el parámetro map_location para asegurar compatibilidad
-        try:
-            # Primer método: cargar con weights_only=False si la versión lo soporta
-            model = yolov5.load(model_path, weights_only=False)
-            return model
-        except TypeError:
-            # Segundo método: si el primer método falla, intentar un enfoque más básico
-            try:
-                model = yolov5.load(model_path)
-                return model
-            except Exception as e:
-                # Si todo falla, intentar cargar el modelo con torch directamente
-                st.warning(f"Intentando método alternativo de carga...")
-                
-                # Modificar sys.path temporalmente para poder importar torch correctamente
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                if current_dir not in sys.path:
-                    sys.path.append(current_dir)
-                
-                # Cargar el modelo con torch directamente
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
-                return model
-    
-    except Exception as e:
-        st.error(f"❌ Error al cargar el modelo: {str(e)}")
-        st.info("""
-        Recomendaciones:
-        1. Instalar una versión compatible de PyTorch y YOLOv5:
-           ```
-           pip install torch==1.12.0 torchvision==0.13.0
-           pip install yolov5==7.0.9
-           ```
-        2. Asegúrate de tener el archivo del modelo en la ubicación correcta
-        3. Si el problema persiste, intenta descargar el modelo directamente de torch hub
-        """)
-        return None
-
-# Título y descripción de la aplicación
-st.title("🔍 Detección de Objetos en Imágenes")
+# 🎀 Título principal
+st.title("🌸 Analizador de Textos Cute con TextBlob 🌸")
 st.markdown("""
-Esta aplicación utiliza YOLOv5 para detectar objetos en imágenes capturadas con tu cámara.
-Ajusta los parámetros en la barra lateral para personalizar la detección.
+Bienvenido a esta aplicación re tierna para analizar tus textos ✨.
+Aquí podrás:
+- Analizar sentimientos y subjetividad 💖
+- Ver tus palabras más usadas 🌈
+- Traducir tu texto si es necesario ✨
 """)
 
-# Cargar el modelo
-with st.spinner("Cargando modelo YOLOv5..."):
-    model = load_yolov5_model()
+# 🎀 Opciones de entrada
+st.sidebar.title("🌸 Opciones mágicas")
+modo = st.sidebar.selectbox(
+    "¿Cómo quieres ingresar tu texto?",
+    ["Escribir texto", "Subir un archivo"]
+)
 
-# Si el modelo se cargó correctamente, configuramos los parámetros
-if model:
-    # Sidebar para los parámetros de configuración
-    st.sidebar.title("Parámetros")
+# 🎀 Función para contar palabras
+def contar_palabras(texto):
+    stop_words = set([
+        "a", "al", "como", "con", "de", "del", "el", "ella", "ellos", "en", "es", "la", "lo", 
+        "los", "las", "por", "para", "que", "un", "una", "y", "yo", "tú", "mi", "mis", "tu", "tus",
+        "the", "and", "for", "from", "you", "your", "this", "that", "with", "was", "are", "have", "has"
+    ])
     
-    # Ajustar parámetros del modelo
-    with st.sidebar:
-        st.subheader('Configuración de detección')
-        model.conf = st.slider('Confianza mínima', 0.0, 1.0, 0.25, 0.01)
-        model.iou = st.slider('Umbral IoU', 0.0, 1.0, 0.45, 0.01)
-        st.caption(f"Confianza: {model.conf:.2f} | IoU: {model.iou:.2f}")
-        
-        # Opciones adicionales
-        st.subheader('Opciones avanzadas')
-        try:
-            model.agnostic = st.checkbox('NMS class-agnostic', False)
-            model.multi_label = st.checkbox('Múltiples etiquetas por caja', False)
-            model.max_det = st.number_input('Detecciones máximas', 10, 2000, 1000, 10)
-        except:
-            st.warning("Algunas opciones avanzadas no están disponibles con esta configuración")
+    palabras = re.findall(r'\b\w+\b', texto.lower())
+    palabras_filtradas = [p for p in palabras if p not in stop_words and len(p) > 2]
     
-    # Contenedor principal para la cámara y resultados
-    main_container = st.container()
+    contador = {}
+    for palabra in palabras_filtradas:
+        contador[palabra] = contador.get(palabra, 0) + 1
     
-    with main_container:
-        # Capturar foto con la cámara
-        picture = st.camera_input("Capturar imagen", key="camera")
-        
-        if picture:
-            # Procesar la imagen capturada
-            bytes_data = picture.getvalue()
-            cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-            
-            # Realizar la detección
-            with st.spinner("Detectando objetos..."):
-                try:
-                    results = model(cv2_img)
-                except Exception as e:
-                    st.error(f"Error durante la detección: {str(e)}")
-                    st.stop()
-            
-            # Parsear resultados
-            try:
-                predictions = results.pred[0]
-                boxes = predictions[:, :4]
-                scores = predictions[:, 4]
-                categories = predictions[:, 5]
-                
-                # Mostrar resultados
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("Imagen con detecciones")
-                    # Renderizar las detecciones
-                    results.render()
-                    # Mostrar imagen con las detecciones
-                    st.image(cv2_img, channels='BGR', use_column_width=True)
-                
-                with col2:
-                    st.subheader("Objetos detectados")
-                    
-                    # Obtener nombres de etiquetas
-                    label_names = model.names
-                    
-                    # Contar categorías
-                    category_count = {}
-                    for category in categories:
-                        category_idx = int(category.item()) if hasattr(category, 'item') else int(category)
-                        if category_idx in category_count:
-                            category_count[category_idx] += 1
-                        else:
-                            category_count[category_idx] = 1
-                    
-                    # Crear dataframe para mostrar resultados
-                    data = []
-                    for category, count in category_count.items():
-                        label = label_names[category]
-                        confidence = scores[categories == category].mean().item() if len(scores) > 0 else 0
-                        data.append({
-                            "Categoría": label,
-                            "Cantidad": count,
-                            "Confianza promedio": f"{confidence:.2f}"
-                        })
-                    
-                    if data:
-                        df = pd.DataFrame(data)
-                        st.dataframe(df, use_container_width=True)
-                        
-                        # Mostrar gráfico de barras
-                        st.bar_chart(df.set_index('Categoría')['Cantidad'])
-                    else:
-                        st.info("No se detectaron objetos con los parámetros actuales.")
-                        st.caption("Prueba a reducir el umbral de confianza en la barra lateral.")
-            except Exception as e:
-                st.error(f"Error al procesar los resultados: {str(e)}")
-                st.stop()
-else:
-    st.error("No se pudo cargar el modelo. Por favor verifica las dependencias e inténtalo nuevamente.")
-    st.stop()
+    return dict(sorted(contador.items(), key=lambda x: x[1], reverse=True))
 
-# Información adicional y pie de página
+# 🎀 Función para traducir texto
+translator = Translator()
+
+def traducir_texto(texto):
+    try:
+        traduccion = translator.translate(texto, src='es', dest='en')
+        return traduccion.text
+    except Exception as e:
+        st.error(f"🌸 Error al traducir: {e}")
+        return texto
+
+# 🎀 Función para procesar el texto
+def procesar_texto(texto):
+    texto_original = texto
+    texto_ingles = traducir_texto(texto)
+    blob = TextBlob(texto_ingles)
+    
+    sentimiento = blob.sentiment.polarity
+    subjetividad = blob.sentiment.subjectivity
+    
+    contador_palabras = contar_palabras(texto_ingles)
+    
+    return {
+        "sentimiento": sentimiento,
+        "subjetividad": subjetividad,
+        "contador_palabras": contador_palabras,
+        "texto_original": texto_original,
+        "texto_traducido": texto_ingles
+    }
+
+# 🎀 Función para mostrar resultados lindos
+def mostrar_resultados(resultados):
+    st.subheader("💖 Resultados del Análisis")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**🌟 Sentimiento:**")
+        sentimiento_norm = (resultados["sentimiento"] + 1) / 2
+        st.progress(sentimiento_norm)
+        
+        if resultados["sentimiento"] > 0.05:
+            st.success(f"😊 Positivo ({resultados['sentimiento']:.2f})")
+        elif resultados["sentimiento"] < -0.05:
+            st.error(f"😢 Negativo ({resultados['sentimiento']:.2f})")
+        else:
+            st.info(f"😐 Neutral ({resultados['sentimiento']:.2f})")
+        
+        st.markdown("**🌟 Subjetividad:**")
+        st.progress(resultados["subjetividad"])
+        
+        if resultados["subjetividad"] > 0.5:
+            st.warning(f"💭 Alta subjetividad ({resultados['subjetividad']:.2f})")
+        else:
+            st.info(f"📋 Baja subjetividad ({resultados['subjetividad']:.2f})")
+    
+    with col2:
+        st.markdown("**🎀 Palabras más frecuentes:**")
+        if resultados["contador_palabras"]:
+            df_palabras = pd.DataFrame(
+                list(resultados["contador_palabras"].items())[:10],
+                columns=["Palabra", "Frecuencia"]
+            )
+            chart = alt.Chart(df_palabras).mark_bar(
+                color='#FFB6C1'  # ROSADITO 🎀
+            ).encode(
+                x=alt.X('Palabra:N', sort='-y'),
+                y='Frecuencia:Q',
+                tooltip=['Palabra', 'Frecuencia']
+            ).properties(
+                width=400,
+                height=300
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.write("🌸 No hay suficientes palabras para mostrar.")
+
+    # 🎀 Texto traducido
+    st.subheader("🌸 Texto Traducido")
+    with st.expander("✨ Ver traducción completa"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**🌼 Texto Original (Español):**")
+            st.text(resultados["texto_original"])
+        with col2:
+            st.markdown("**🌼 Texto Traducido (Inglés):**")
+            st.text(resultados["texto_traducido"])
+
+# 🎀 Lógica principal
+if modo == "Escribir texto":
+    st.subheader("💌 Escribe tu texto aquí")
+    texto = st.text_area("", height=200, placeholder="Escribe algo bonito...")
+    
+    if st.button("🌸 Analizar texto"):
+        if texto.strip():
+            with st.spinner("🌸 Analizando tu texto con amor..."):
+                resultados = procesar_texto(texto)
+                mostrar_resultados(resultados)
+        else:
+            st.warning("Por favor escribe algo para analizar 🌸.")
+
+elif modo == "Subir un archivo":
+    st.subheader("📂 Sube un archivo de texto")
+    archivo = st.file_uploader("Elige tu archivo mágico:", type=["txt", "csv", "md"])
+    
+    if archivo is not None:
+        contenido = archivo.getvalue().decode("utf-8")
+        with st.expander("📖 Ver contenido del archivo"):
+            st.text(contenido[:1000] + ("..." if len(contenido) > 1000 else ""))
+        
+        if st.button("🌸 Analizar archivo"):
+            with st.spinner("🌸 Analizando tu archivo con cariño..."):
+                resultados = procesar_texto(contenido)
+                mostrar_resultados(resultados)
+
+# 🎀 Footer
 st.markdown("---")
-st.caption("""
-**Acerca de la aplicación**: Esta aplicación utiliza YOLOv5 para detección de objetos en tiempo real.
-Desarrollada con Streamlit y PyTorch.
-""")
+st.markdown("Desarrollado con mucho 💖 y magia usando **Streamlit**, **TextBlob** y **Altair** ✨")
